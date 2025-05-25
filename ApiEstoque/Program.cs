@@ -1,3 +1,4 @@
+using ApiEstoque;
 using ApiEstoque.Contexto;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -34,6 +35,10 @@ builder.Services.AddCors(
         policy => policy.SetIsOriginAllowed(origin => origin == "http://localhost:4200" || origin is null).AllowAnyMethod().AllowAnyHeader()
     )
 );
+
+Gerador.GerarChave();
+DotNetEnv.Env.Load();
+builder.Configuration.AddEnvironmentVariables();
 
 var app = builder.Build();
 
