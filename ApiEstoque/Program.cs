@@ -1,7 +1,14 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using ApiEstoque;
 using ApiEstoque.Contexto;
+using ApiEstoque.Models;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -39,6 +46,50 @@ builder.Services.AddCors(
 Gerador.GerarChave();
 DotNetEnv.Env.Load();
 builder.Configuration.AddEnvironmentVariables();
+builder.Services.AddSingleton<BlackList>();
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+}).AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new()
+    {
+        ValidateIssuer = false,
+        ValidateAudience = true,
+        ValidAudience = "ApiEstoque",
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.FromMinutes(5),
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["ChaveSecreta"]!))
+    };
+    options.Events = new()
+    {
+        OnChallenge = async context =>
+        {
+            context.HandleResponse();
+            await EnviarAcessoNaoAutenticado(context);
+        },
+        OnAuthenticationFailed = async context =>
+        {
+            context.NoResult();
+            await EnviarAcessoNaoAutenticado(context);
+        },
+        OnTokenValidated = async context =>
+        {
+            var jti = context.Principal!.FindFirstValue(JwtRegisteredClaimNames.Jti);
+            var blacklist = context.HttpContext.RequestServices.GetRequiredService<BlackList>();
+            if (jti != null && await blacklist.ChecarTokenRevogado(jti))
+            {
+                context.NoResult();
+                await EnviarAcessoRevogado(context);
+            }
+        }
+    };
+});
+
+builder.Services.AddHttpContextAccessor();
 
 var app = builder.Build();
 
@@ -69,3 +120,24 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+
+static async Task EnviarAcessoNaoAutenticado(BaseContext<JwtBearerOptions> context)
+{
+    context.Response.StatusCode = 401;
+    context.Response.ContentType = "application/json";
+    await context.Response.WriteAsJsonAsync(new
+    {
+        Mensagem = "Acesso não autenticado"
+    });
+}
+
+static async Task EnviarAcessoRevogado(BaseContext<JwtBearerOptions> context)
+{
+    context.Response.StatusCode = 401;
+    context.Response.ContentType = "application/json";
+    await context.Response.WriteAsJsonAsync(new
+    {
+        Mensagem = "Acesso revogado - faça login novamente"
+    });
+}
