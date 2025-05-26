@@ -3,11 +3,15 @@ namespace ApiEstoque.Controllers;
 using Microsoft.AspNetCore.Mvc;
 using ApiEstoque.Models;
 using ApiEstoque.Contexto;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using Microsoft.AspNetCore.Authorization;
 
 [ApiController]
-[Route("api/[controller]")]
-
-public class UsuarioController(BancoDados Banco) : ControllerBase
+[Route("[controller]")]
+public class UsuariosController(BancoDados Banco, IConfiguration Configuracoes) : ControllerBase
 {
     [HttpGet]
     public ActionResult ListarUsuarios()
@@ -23,6 +27,54 @@ public class UsuarioController(BancoDados Banco) : ControllerBase
         model.Senha = $"estoque@{DateTime.Now:ddMMyyyy}";
         Banco.TabelaUsuarios.Add(model);
         Banco.SaveChanges();
-        return Ok(new { Mensagem = "Usuario criado com sucesso" });
+        return Ok(new { Mensagem = "Usuário criado com sucesso" });
+    }
+
+    [HttpPost("/login")]
+    public ActionResult FazerLogin(Login model)
+    {
+        Usuario? user = Banco.TabelaUsuarios.SingleOrDefault(u => u.Email == model.Email && u.Senha == model.Senha);
+        if (user == null) return NotFound(new { Mensagem = "E-mail e/ou senha incorretos" });
+        return Ok(new
+        {
+            Token = GerarToken(user)
+        });
+    }
+
+    [HttpGet("/logout")]
+    [Authorize]
+    public ActionResult FazerLogout([FromServices] BlackList blacklist)
+    {
+        blacklist.RevogarToken(
+            User.FindFirstValue(JwtRegisteredClaimNames.Jti)!,
+            DateTimeOffset.FromUnixTimeSeconds(long.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Exp)!)).DateTime
+        );
+        return Ok(new
+        {
+            Mensagem = "Sessão encerrada com sucesso"
+        });
+    }
+
+    string GerarToken(Usuario user)
+    {
+        string token = "";
+        DateTime iat = DateTime.UtcNow, exp = iat.AddMinutes(30);
+        token = new JwtSecurityTokenHandler().WriteToken(
+            new JwtSecurityToken(
+                audience: "ApiEstoque",
+                claims: [
+                    new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                    new Claim(JwtRegisteredClaimNames.Iat, new DateTimeOffset(iat).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                    new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+                    new Claim(JwtRegisteredClaimNames.Name, user.Nome!)
+                ],
+                expires: exp,
+                signingCredentials: new(
+                    new SymmetricSecurityKey(
+                        Encoding.UTF8.GetBytes(Configuracoes["ChaveSecreta"]!)), SecurityAlgorithms.HmacSha256
+                    )
+                )
+        );
+        return token;
     }
 }
